@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/interactjs/dist/interact.min.js"></script>
+    <style>
+        .chart-container {
+            position: absolute;
+            width: calc(100% / 8); /* Ширина по умолчанию */
+            height: 400px;
+            resize: both;
+            overflow: auto;
+            border: 1px solid black; /* Добавляем границу */
+        }
+        .chart-container canvas {
+            width: 100% !important;
+            height: auto !important;
+        }
+        .add-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            background-color: #3e95cd;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+    </style>
+    <title>Visualizing Data with Chart.js</title>
+</head>
+<body>
+    <button class="add-button" onclick="addChart()">Add</button>
+    <button class="save-button" onclick="saveCharts()">Save</button>
+    <script>
+        let charts = []; // Массив для хранения созданных графиков
+
+        async function addChart() {
+            const chartContainer = document.createElement('div');
+            chartContainer.classList.add('chart-container');
+            const prevChartContainer = charts[charts.length - 1]?.container;
+            if (prevChartContainer) {
+                chartContainer.style.top = `${prevChartContainer.offsetTop + prevChartContainer.offsetHeight + 10}px`; // Размещение под предыдущим графиком
+            }
+            document.body.appendChild(chartContainer);
+
+            const ctx = document.createElement('canvas').getContext('2d');
+            chartContainer.appendChild(ctx.canvas);
+
+            const newChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [{
+                        data: [],
+                        label: 'BTC/USD',
+                        borderColor: '#3e95cd',
+                        fill: false
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        xAxes: [{
+                            display: false,
+                        }],
+                        yAxes: [{
+                            scaleLabel: {
+                                display: true,
+                                labelString: 'Price'
+                            }
+                        }]
+                    }
+                }
+            });
+
+            charts.push({ chart: newChart, container: chartContainer }); // Добавляем новый график в массив
+
+            // Отправляем данные нового графика на сервер
+            try {
+                const response = await fetch('add_chart.php', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/x-www-form-urlencoded'
+                    },
+                    body: new URLSearchParams({
+                        user_id: 1, // Замените на текущего пользователя
+                        x_position: chartContainer.offsetLeft,
+                        y_position: chartContainer.offsetTop,
+                        width: 400,
+                        height: 300,
+                        graph_color: '#000000'
+                    })
+                });
+                const result = await response.json();
+                if (result.status === 'success') {
+                    console.log('Graph added successfully with ID:', result.graph_id);
+                } else {
+                    console.error('Error adding graph:', result.message);
+                }
+            } catch (error) {
+                console.error('Fetch error:', error);
+            }
+
+            interact(chartContainer)
+                .draggable({
+                    modifiers: [
+                        interact.modifiers.restrictRect({
+                            restriction: 'parent',
+                            endOnly: true
+                        })
+                    ],
+                    listeners: {
+                        move(event) {
+                            const target = event.target;
+                            const chart = charts.find(item => item.container === target);
+                            let x = (parseFloat(chart.container.getAttribute('data-x')) || 0) + event.dx;
+                            let y = (parseFloat(chart.container.getAttribute('data-y')) || 0) + event.dy;
+
+                            // Проверяем границы экрана
+                            const rect = chart.container.getBoundingClientRect();
+                            const rightBound = window.innerWidth - rect.width;
+                            const bottomBound = window.innerHeight - rect.height;
+
+                            if (rect.left + event.dx < 0) {
+                                x = 0;
+                            } else if (rect.left + event.dx > rightBound) {
+                                x = rightBound;
+                            }
+
+                            if (rect.top + event.dy < 0) {
+                                y = 0;
+                            } else if (rect.top + event.dy > bottomBound) {
+                                y = bottomBound;
+                            }
+
+                            chart.container.style.transform = `translate(${x}px, ${y}px)`;
+                            chart.container.setAttribute('data-x', x);
+                            chart.container.setAttribute('data-y', y);
+
+                            // Проверяем, не пересекаются ли графики
+                            for (const otherChart of charts.filter(c => c !== chart)) {
+                                const rect1 = chart.container.getBoundingClientRect();
+                                const rect2 = otherChart.container.getBoundingClientRect();
+
+                                if (!(rect1.right < rect2.left ||
+                                      rect1.left > rect2.right ||
+                                      rect1.bottom < rect2.top ||
+                                      rect1.top > rect2.bottom)) {
+                                    // Графики пересекаются
+                                    const newX = (parseFloat(chart.container.getAttribute('data-x')) || 0) - event.dx;
+                                    const newY = (parseFloat(chart.container.getAttribute('data-y')) || 0) - event.dy;
+                                    chart.container.style.transform = `translate(${newX}px, ${newY}px)`;
+                                    chart.container.setAttribute('data-x', newX);
+                                    chart.container.setAttribute('data-y', newY);
+                                }
+                            }
+                        }
+                    }
+                })
+                .resizable({
+                    edges: { left: true, right: true, bottom: true, top: true },
+                    modifiers: [
+                        interact.modifiers.restrictEdges({
+                            outer: 'parent',
+                        }),
+                        interact.modifiers.restrictSize({
+                            min: { width: 100, height: 50 },
+                        })
+                    ],
+                    listeners: {
+                        move(event) {
+                            let target = event.target;
+                            let x = (parseFloat(target.getAttribute('data-x')) || 0);
+                            let y = (parseFloat(target.getAttribute('data-y')) || 0);
+
+                            // Update the element's style
+                            target.style.width = event.rect.width + 'px';
+                            target.style.height = event.rect.height + 'px';
+
+                            // Translate when resizing from top or left edges
+                            x += event.deltaRect.left;
+                            y += event.deltaRect.top;
+
+                            target.style.transform = 'translate(' + x + 'px,' + y + 'px)';
+
+                            target.setAttribute('data-x', x);
+                            target.setAttribute('data-y', y);
+
+                            // Update the chart instance
+                            const chartInstance = charts.find(item => item.container === target).chart;
+                            chartInstance.resize();
+                        }
+                    }
+                });
+        }
+
+        // Добавляем первый график при загрузке страницы
+        window.onload = addChart;
+
+        const socket = new WebSocket('wss://ws.coinapi.io/v1/');
+        socket.onopen = function (event) {
+            socket.send(JSON.stringify({
+                "type": "hello",
+                "apikey": "5ABB5D9B-EF4C-4654-9DDC-9188E398E71D",
+                "subscribe_data_type": ["trade"],
+                "subscribe_filter_asset_id": ["TON"]
+            }));
+        };
+
+        socket.onmessage = function (event) {
+            const data = JSON.parse(event.data);
+
+            for (const chartData of charts) {
+                const chart = chartData.chart;
+                const chartContainer = chartData.container;
+                console.log(data.time_exchange);
+                console.log(data.price);
+                console.log(data);
+                chart.data.labels.push(new Date(data.time_exchange));
+                chart.data.datasets[0].data.push(data.price);
+
+                // Вычисляем максимальное количество точек на основе ширины графика
+                const maxPoints = Math.floor(chartContainer.clientWidth / 10); // Примерное количество точек на 10 пикселей
+
+                if (chart.data.labels.length > maxPoints) {
+                    const numPointsToRemove = chart.data.labels.length - maxPoints;
+                    chart.data.labels.splice(0, numPointsToRemove);
+                    chart.data.datasets[0].data.splice(0, numPointsToRemove);
+                }
+
+                chart.update({ duration: 0, lazy: false, easing: 'linear' }, false);
+            }
+        };
+
+        socket.onerror = function (error) {
+            console.log(`WebSocket error: ${error}`);
+        };
+        async function saveCharts() {
+        try {
+            const response = await fetch('save_charts.php', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: new URLSearchParams({
+                    charts: JSON.stringify(charts.map(chart => ({
+                        user_id: 1, // Ваш текущий пользователь
+                        x_position: chart.container.offsetLeft,
+                        y_position: chart.container.offsetTop,
+                        width: chart.container.offsetWidth,
+                        height: chart.container.offsetHeight,
+                        graph_color: chart.chart.data.datasets[0].borderColor
+                    })))
+                })
+            });
+            const result = await response.json();
+            if (result.status === 'success') {
+                console.log('Charts saved successfully');
+            } else {
+                console.error('Error saving charts:', result.message);
+            }
+        } catch (error) {
+            console.error('Fetch error:', error);
+        }
+    }
+    </script>
+</body>
+</html>
